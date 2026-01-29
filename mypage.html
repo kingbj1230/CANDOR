@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>마이페이지 | kimyun</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body data-page="mypage-only">
+    <header class="topbar">
+      <div class="container topbar__content">
+        <div class="logo">kimyun</div>
+        <nav class="nav">
+          <a href="./index.html">홈으로</a>
+        </nav>
+        <div class="auth-buttons">
+          <button id="loginBtn" class="btn ghost">로그인</button>
+          <button id="signupBtn" class="btn primary">회원가입</button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="section" id="mypage">
+        <div class="container">
+          <div class="section__header">
+            <div>
+              <p class="eyebrow">개인 맞춤</p>
+              <h2>마이페이지</h2>
+              <p class="subtitle">프로필/활동/북마크를 한 곳에서 관리하세요.</p>
+            </div>
+          </div>
+          <div class="card mypage">
+            <div class="mypage__info">
+              <h3 id="mypageName">로그인이 필요합니다</h3>
+              <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                <span class="pill success" id="adminBadge" style="display:none;">관리자</span>
+                <span class="pill info" id="contributorBadge" style="display:none;">기여자</span>
+              </div>
+              <p class="subtitle" id="mypageEmail">-</p>
+              <div class="mypage__profile">
+                <div class="mypage__row">
+                  <label class="caption" for="mypageNickname">닉네임</label>
+                  <input id="mypageNickname" type="text" placeholder="닉네임" disabled />
+                </div>
+                <div class="mypage__row">
+                  <label class="caption">가입일</label>
+                  <span id="mypageCreatedAt" class="subtitle">-</span>
+                </div>
+                <div class="mypage__row" style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <button class="btn primary" id="saveNicknameBtn" disabled>닉네임 저장</button>
+                  <button class="btn ghost" id="refreshMypageBtn" disabled>새로고침</button>
+                </div>
+                <p class="caption" id="profileHint">
+                  프로필/권한은 Supabase `user_profiles` 테이블을 사용합니다. (정책에 따라 최초 생성이 막혀 있을 수 있어요.)
+                </p>
+              </div>
+              <div class="pill-row">
+                <span class="pill neutral" id="badgeRole">게스트</span>
+                <span class="pill info" id="badgeStats">활동 0</span>
+                <span class="pill success" id="badgeReputation" style="display:none;">기여 점수 0</span>
+              </div>
+            </div>
+            <div class="mypage__saved">
+              <h4>관심(북마크)</h4>
+              <div class="mypage__split">
+                <div>
+                  <p class="caption">관심 후보</p>
+                  <ul id="bookmarkCandidates"></ul>
+                </div>
+                <div>
+                  <p class="caption">관심 공약</p>
+                  <ul id="bookmarkPledges"></ul>
+                </div>
+              </div>
+            </div>
+            <div class="mypage__activity">
+              <h4>내 활동</h4>
+              <div class="mypage__split">
+                <div>
+                  <p class="caption">내가 쓴 글</p>
+                  <ul id="myPosts"></ul>
+                </div>
+                <div>
+                  <p class="caption">내가 쓴 댓글</p>
+                  <ul id="myComments"></ul>
+                </div>
+              </div>
+              <p class="caption" id="recentActivityHint">최근 활동은 (게시글/댓글/북마크) 기준으로 표시됩니다.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer__content">
+        <div>
+          <div class="logo">kimyun</div>
+          <p class="subtitle">공약 이행률을 투명하게 확인하는 데이터 허브.</p>
+        </div>
+        <div class="footer__links">
+          <a href="./index.html#candidates">후보자</a>
+          <a href="./index.html#community">커뮤니티</a>
+        </div>
+        <p class="caption">© 2026 PledgeTrack. Demo only.</p>
+      </div>
+    </footer>
+
+    <div class="modal" id="authModal" aria-hidden="true">
+      <div class="modal__content">
+        <button class="modal__close" id="closeModal">✕</button>
+        <h3 id="modalTitle">로그인</h3>
+        <input type="email" id="authEmail" placeholder="이메일" />
+        <input type="password" id="authPassword" placeholder="비밀번호" />
+        <button class="btn primary" id="authSubmit">확인</button>
+        <p class="caption">Supabase 인증으로 로그인/회원가입됩니다.</p>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="./mypage.js"></script>
+  </body>
+</html>

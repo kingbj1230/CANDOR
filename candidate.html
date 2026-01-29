@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>후보자 상세 - kimyun</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar__content">
+      <div class="logo"><a href="./index.html" style="text-decoration:none; color:inherit;">kimyun</a></div>
+      <nav class="nav">
+        <a href="./index.html#candidates">후보자</a>
+        <a href="./mypage.html">마이페이지</a>
+        <a href="#community">커뮤니티</a>
+      </nav>
+      <div class="auth-buttons">
+        <button id="loginBtn" class="btn ghost">로그인</button>
+        <button id="signupBtn" class="btn primary">회원가입</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="section">
+      <div class="container">
+        <div id="loadingState" class="card">
+          <p class="subtitle">후보자 정보를 불러오는 중...</p>
+        </div>
+
+        <div id="errorState" class="card" style="display:none;">
+          <p class="subtitle" id="errorMessage">후보자를 찾을 수 없습니다.</p>
+          <a class="btn primary" href="./index.html#candidates" style="display:inline-block; margin-top:12px;">목록으로</a>
+        </div>
+
+        <div id="candidateDetail" style="display:none;">
+          <p class="eyebrow">후보자 상세</p>
+
+          <div class="card" style="margin-top:12px;">
+            <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+              <div id="candidateAvatar" class="avatar" style="width:72px; height:72px; font-size:22px;"></div>
+              <div style="flex:1; min-width:240px;">
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                  <h1 id="candidateName" style="margin:0; font-size:28px;"></h1>
+                </div>
+                <p class="candidate__meta" id="candidateMeta" style="margin:8px 0 0;"></p>
+                <p class="subtitle" id="candidateDescription" style="margin:10px 0 0;"></p>
+                <div class="progress" style="margin:14px 0 0;">
+                  <div class="progress__bar" id="candidateProgressBar"></div>
+                </div>
+                <p class="caption" style="margin:8px 0 0;">평균 이행률: <span id="candidateProgressText">0%</span> · 공약 수: <span id="candidatePledgeCount">0</span></p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px;">
+            <h2 style="margin:0 0 12px;">공약</h2>
+            <p class="subtitle" style="margin-top:0;">공약을 클릭하면 세부 내용을 펼쳐볼 수 있어요.</p>
+            <div id="pledgesList"></div>
+          </div>
+
+          <div class="card" id="community" style="margin-top:16px;">
+            <div class="section__header" style="margin-bottom:12px;">
+              <div>
+                <p class="eyebrow">토론</p>
+                <h2 style="margin:0;">후보자 커뮤니티</h2>
+                <p class="subtitle">이 후보자에 대한 의견을 나눠보세요.</p>
+              </div>
+              <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start;">
+                <select id="candidatePledgeSelect" style="min-width:220px;">
+                  <option value="">(선택) 공약 태그</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="post-form" style="width:100%; max-width:none;">
+              <input id="postTitle" type="text" placeholder="제목" />
+              <textarea id="postContent" rows="3" placeholder="내용을 입력하세요"></textarea>
+              <button class="btn primary" id="postSubmit">등록</button>
+            </div>
+
+            <div class="divider" style="margin:14px 0;"></div>
+            <div id="postList" class="post-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal" id="authModal" aria-hidden="true">
+    <div class="modal__content">
+      <button class="modal__close" id="closeModal">✕</button>
+      <h3 id="modalTitle">로그인</h3>
+      <input type="email" id="authEmail" placeholder="이메일" />
+      <input type="password" id="authPassword" placeholder="비밀번호" />
+      <button class="btn primary" id="authSubmit">확인</button>
+      <p class="caption">Supabase 인증으로 로그인/회원가입됩니다.</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="./candidate.js"></script>
+</body>
+</html>
+

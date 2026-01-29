@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>후보자 공약 이행률</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <!-- 상단 네비게이션 및 로그인/회원가입 영역 -->
+  <header class="topbar">
+    <div class="container topbar__content">
+      <div class="logo">CONDOR</div>
+      <nav class="nav">
+        <a href="#candidates">후보자</a>
+        <a href="./mypage.html">마이페이지</a>
+        <a href="#community">커뮤니티</a>
+      </nav>
+      <div class="auth-buttons">
+        <button id="loginBtn" class="btn ghost">로그인</button>
+        <button id="signupBtn" class="btn primary">회원가입</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 메인 콘텐츠 -->
+  <main>
+    <section class="hero">
+      <div class="container hero__content">
+        <div>
+          <p class="eyebrow">#데모버전</p>
+          <h1>후보자 공약 </h1>
+          <p class="subtitle">신뢰할 수 있는 데이터와 커뮤니티로 공약 이행 현황을 확인하고 공유하세요.</p>
+          <div class="hero__actions">
+            <a class="btn primary" href="#candidates">공약 확인하기</a>
+            <a class="btn ghost" href="#community">커뮤니티 보기</a>
+          </div>
+          <!-- 주요 지표 요약 -->
+          <div class="stats">
+            <div>
+              <p class="stat-number" id="statCandidates">6</p>
+              <p class="stat-label">등록 후보자</p>
+            </div>
+            <div>
+              <p class="stat-number" id="statPromises">32</p>
+              <p class="stat-label">추적 공약</p>
+            </div>
+            <div>
+              <p class="stat-number" id="statUsers">2,140</p>
+              <p class="stat-label">커뮤니티 유저</p>
+            </div>
+          </div>
+        </div>
+        <!-- 이행률 상위 후보 하이라이트 패널 -->
+        <div class="card hero__panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">실시간 공약 이행률</p>
+              <h3 id="highlightCandidate">김민주</h3>
+            </div>
+            <span class="pill success">이행 중</span>
+          </div>
+          <div class="progress">
+            <div class="progress__bar" id="highlightProgress"></div>
+          </div>
+          <ul class="promise-list" id="highlightPromises"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 후보자 검색/필터링 및 공약 카드 -->
+    <section class="section" id="candidates">
+      <div class="container">
+        <div class="section__header">
+          <div>
+            <p class="eyebrow">공약 이행률 확인</p>
+            <h2>후보자 검색</h2>
+            <p class="subtitle">이름이나 정당으로 검색해 공약 이행 현황을 확인하세요.</p>
+          </div>
+          <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start;">
+            <div class="search-group">
+              <input type="text" id="searchInput" placeholder="후보자 이름 또는 정당 입력" />
+              <select id="statusFilter">
+                <option value="all">전체 상태</option>
+                <option value="progress">이행 중</option>
+                <option value="pending">진행 대기</option>
+                <option value="failed">이행 실패</option>
+              </select>
+            </div>
+            <button class="btn primary" id="addCandidateBtn">+ 후보 추가</button>
+            <button class="btn ghost" id="addPledgeBtn">+ 공약 추가</button>
+          </div>
+        </div>
+        <div id="candidateList" class="grid"></div> <!-- JS에서 후보 카드 렌더 -->
+      </div>
+    </section>
+
+    <!-- 커뮤니티: 글 작성 폼 + 게시글 리스트 -->
+    <section class="section" id="community">
+      <div class="container">
+        <div class="section__header">
+          <div>
+            <p class="eyebrow">소통</p>
+            <h2>커뮤니티</h2>
+            <p class="subtitle">공약 이행 현황을 의견과 함께 공유하세요.</p>
+          </div>
+          <div class="post-form">
+            <select id="postCandidateSelect">
+              <option value="">(선택) 후보자 토론</option>
+            </select>
+            <select id="postPledgeSelect">
+              <option value="">(선택) 공약 토론</option>
+            </select>
+            <input id="postTitle" type="text" placeholder="제목" />
+            <textarea id="postContent" rows="2" placeholder="내용을 입력하세요"></textarea>
+            <button class="btn primary" id="postSubmit">등록</button>
+          </div>
+        </div>
+        <div class="community-filters">
+          <select id="communityFilterCandidate">
+            <option value="">전체 후보</option>
+          </select>
+          <select id="communityFilterPledge">
+            <option value="">전체 공약</option>
+          </select>
+          <button class="btn ghost" id="clearCommunityFilter">필터 해제</button>
+        </div>
+        <div id="postList" class="post-list"></div> <!-- JS에서 커뮤니티 글 렌더 -->
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <div class="container footer__content">
+      <div>
+        <div class="logo">kimyun</div>
+        <p class="subtitle">공약 이행률을 투명하게 확인하는 데이터 허브.</p>
+      </div>
+      <div class="footer__links">
+        <a href="#candidates">후보자</a>
+        <a href="./mypage.html">마이페이지</a>
+        <a href="#community">커뮤니티</a>
+      </div>
+      <p class="caption">© 2026 PledgeTrack. Demo only.</p>
+    </div>
+  </footer>
+
+  <div class="modal" id="authModal" aria-hidden="true">
+    <div class="modal__content">
+      <button class="modal__close" id="closeModal">✕</button>
+      <h3 id="modalTitle">로그인</h3>
+      <input type="email" id="authEmail" placeholder="이메일" />
+      <input type="password" id="authPassword" placeholder="비밀번호" />
+      <button class="btn primary" id="authSubmit">확인</button>
+      <p class="caption">Supabase 인증으로 로그인/회원가입됩니다.</p>
+    </div>
+  </div>
+
+  <!-- 후보 추가 모달 -->
+  <div class="modal" id="candidateModal" aria-hidden="true">
+    <div class="modal__content" style="max-width: 500px;">
+      <button class="modal__close" id="closeCandidateModal">✕</button>
+      <h3>후보자 추가</h3>
+      <form id="candidateForm" style="display: flex; flex-direction: column; gap: 12px;">
+        <input type="text" id="candidateName" placeholder="이름 *" required />
+        <input type="text" id="candidateParty" placeholder="소속 정당" />
+        <input type="text" id="candidatePosition" placeholder="직책 (예: 대통령, 시장, 국회의원) *" required />
+        <input type="number" id="candidateElectionYear" placeholder="선거 연도 (예: 2024) *" min="2000" max="2100" required />
+        <input type="text" id="candidateRegion" placeholder="지역 (예: 전국, 서울, 부산)" />
+        <input type="url" id="candidatePhotoUrl" placeholder="사진 URL" />
+        <textarea id="candidateDescription" rows="3" placeholder="한 줄 소개 또는 요약"></textarea>
+        <div style="display: flex; gap: 8px;">
+          <button type="submit" class="btn primary" style="flex: 1;">등록</button>
+          <button type="button" class="btn ghost" id="cancelCandidateBtn" style="flex: 1;">취소</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 공약 추가 모달 -->
+  <div class="modal" id="pledgeModal" aria-hidden="true">
+    <div class="modal__content" style="max-width: 520px;">
+      <button class="modal__close" id="closePledgeModal">✕</button>
+      <h3>공약 추가</h3>
+      <form id="pledgeForm" style="display: flex; flex-direction: column; gap: 12px;">
+        <select id="pledgeCandidateSelect" required>
+          <option value="">후보자 선택 *</option>
+        </select>
+        <input type="text" id="pledgeTitle" placeholder="공약 제목 *" required />
+        <input type="text" id="pledgeCategory" placeholder="카테고리 (예: 경제, 복지, 교육)" />
+        <textarea id="pledgeDescription" rows="3" placeholder="공약 설명"></textarea>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <input type="number" id="pledgeRate" placeholder="이행률(0~100)" min="0" max="100" style="flex:1; min-width: 120px;" />
+          <select id="pledgeStatus" style="flex:1; min-width: 160px;">
+            <option value="">상태 선택</option>
+            <option value="이행">이행</option>
+            <option value="부분이행">부분이행</option>
+            <option value="미이행">미이행</option>
+          </select>
+        </div>
+
+        <select id="pledgeSourceSelect">
+          <option value="">(선택) 이행률 출처</option>
+          <option value="__new__">+ 출처 새로 만들기</option>
+        </select>
+        <div id="newSourceFields" style="display:none; gap:10px;">
+          <input type="text" id="newSourceName" placeholder="출처 이름 (예: 시민평가) *" />
+          <textarea id="newSourceDescription" rows="2" placeholder="출처 설명 (선택)"></textarea>
+        </div>
+
+        <div class="divider"></div>
+        <p class="caption">증빙(선택) — 입력 시 pledge_evidences로 기록됩니다.</p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <select id="evidenceType" style="flex:1; min-width: 140px;">
+            <option value="">증빙 유형</option>
+            <option value="법안">법안</option>
+            <option value="예산">예산</option>
+            <option value="기사">기사</option>
+            <option value="보고서">보고서</option>
+            <option value="기타">기타</option>
+          </select>
+          <input type="url" id="evidenceUrl" placeholder="출처 URL" style="flex:2; min-width: 200px;" />
+        </div>
+        <textarea id="evidenceDescription" rows="2" placeholder="증빙 설명 (선택)"></textarea>
+
+        <div style="display: flex; gap: 8px;">
+          <button type="submit" class="btn primary" style="flex: 1;">등록</button>
+          <button type="button" class="btn ghost" id="cancelPledgeBtn" style="flex: 1;">취소</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 공약 증빙 모달 (조회/추가) -->
+  <div class="modal" id="evidenceModal" aria-hidden="true">
+    <div class="modal__content" style="max-width: 560px;">
+      <button class="modal__close" id="closeEvidenceModal">✕</button>
+      <h3 id="evidenceModalTitle">공약 증빙</h3>
+      <div class="divider"></div>
+      <ul id="evidenceList" class="evidence-list"></ul>
+      <div class="divider"></div>
+      <h4 style="margin:0;">증빙 추가</h4>
+      <form id="evidenceForm" style="display:flex; flex-direction:column; gap:10px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <select id="evidenceAddType" style="flex:1; min-width: 140px;">
+            <option value="">증빙 유형</option>
+            <option value="법안">법안</option>
+            <option value="예산">예산</option>
+            <option value="기사">기사</option>
+            <option value="보고서">보고서</option>
+            <option value="기타">기타</option>
+          </select>
+          <input type="url" id="evidenceAddUrl" placeholder="출처 URL" style="flex:2; min-width: 220px;" />
+        </div>
+        <textarea id="evidenceAddDescription" rows="2" placeholder="증빙 설명 (선택)"></textarea>
+        <div style="display:flex; gap:8px;">
+          <button type="submit" class="btn primary" style="flex:1;">추가</button>
+          <button type="button" class="btn ghost" id="cancelEvidenceBtn" style="flex:1;">닫기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Supabase JS (브라우저용 UMD 번들) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- 인터랙션 스크립트 -->
+  <script src="./script.js"></script>
+</body>
+</html>
