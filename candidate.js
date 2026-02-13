@@ -231,13 +231,19 @@ function renderPosts() {
     const comments = state.commentsByPost[p.id] || [];
     const div = document.createElement("div");
     div.className = "card post";
+    const canEdit = state.user && p.user_id === state.user.id;
+    const canDelete = state.user && (p.user_id === state.user.id || (userProfile && userProfile.role === 'admin'));
     div.innerHTML = `
       <div class="post__header">
         <div>
           <h4 style="margin:0; font-size:16px;">${title}</h4>
           <div class="post__meta">${author} · ${createdAt} · 댓글 ${comments.length}</div>
         </div>
-        <span class="pill neutral">토론</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span class="pill neutral">토론</span>
+          ${canEdit ? `<button class="btn ghost tiny" data-edit-post="${p.id}">수정</button>` : ''}
+          ${canDelete ? `<button class="btn danger tiny" data-delete-post="${p.id}">삭제</button>` : ''}
+        </div>
       </div>
       <div class="pill-row">${tagHtml}</div>
       <p class="subtitle">${bodyPreview || ""}</p>
@@ -246,7 +252,8 @@ function renderPosts() {
           ${comments
             .map((c) => {
               const cDate = (c.created_at || "").slice(0, 10);
-              return `<li><span class="comment-content">${c.content}</span><span class="comment-meta">${cDate}</span></li>`;
+              const canDeleteComment = state.user && (c.user_id === state.user.id || (userProfile && userProfile.role === 'admin'));
+              return `<li><span class="comment-content">${c.content}</span><span class="comment-meta">${cDate}</span>${canDeleteComment ? `<button class="btn ghost tiny" data-delete-comment="${c.id}">삭제</button>` : ''}</li>`;
             })
             .join("")}
         </ul>
@@ -262,20 +269,56 @@ function renderPosts() {
 
 async function createPost({ title, body, pledge_id = null }) {
   if (!state.user) throw new Error("로그인이 필요합니다.");
-  const content = `${title}\n\n${body}`;
-  const { data, error } = await supabaseClient
-    .from("posts")
-    .insert([
-      {
-        user_id: state.user.id,
-        content,
-        candidate_id: state.candidateId,
-        pledge_id: pledge_id || null,
-        is_active: true,
-      },
-    ])
-    .select()
-    .single();
+  const contentText = `${title}\n\n${body}`;
+  const payload = {
+    user_id: state.user.id,
+    content: contentText,
+    candidate_id: state.candidateId,
+    pledge_id: pledge_id || null,
+    is_active: true,
+  };
+
+  let inserted = await supabaseClient.from("posts").insert([payload]).select().single();
+  if (inserted.error) {
+    const msg = inserted.error?.message || "";
+    if (/column .*file_url.* does not exist/i.test(msg)) {
+      const retry = { ...payload };
+      delete retry.file_url;
+      inserted = await supabaseClient.from("posts").insert([retry]).select().single();
+    }
+  }
+  if (inserted.error) throw inserted.error;
+  return inserted.data;
+}
+
+// 업로드 헬퍼 (동일한 방식으로 candidate 페이지에서도 사용 가능)
+async function uploadFileToStorage(file) {
+  if (!file) return null;
+  try {
+    const key = `posts/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
+    const { error: uploadErr } = await supabaseClient.storage.from("post-uploads").upload(key, file, { upsert: true });
+    if (uploadErr) {
+      console.warn("[uploadFileToStorage] upload error", uploadErr);
+      return null;
+    }
+    const { data: urlData } = supabaseClient.storage.from("post-uploads").getPublicUrl(key);
+    return urlData?.publicUrl || null;
+  } catch (e) {
+    console.error("[uploadFileToStorage]", e);
+    return null;
+  }
+}
+
+async function updatePost(postId, newContent) {
+  if (!state.user) throw new Error("로그인이 필요합니다.");
+  const { data, error } = await supabaseClient.from("posts").update({ content: newContent }).eq("id", postId).select().maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function deletePost(postId) {
+  if (!state.user) throw new Error("로그인이 필요합니다.");
+  const { data, error } = await supabaseClient.from("posts").delete().eq("id", postId).select().maybeSingle();
   if (error) throw error;
   return data;
 }
@@ -303,6 +346,13 @@ function openAuthModal(mode = "login") {
   qs("#modalTitle").textContent = mode === "login" ? "로그인" : "회원가입";
   qs("#authModal").classList.add("show");
   qs("#authModal").setAttribute("aria-hidden", "false");
+  const remembered = localStorage.getItem('rememberEmail');
+  if (remembered) {
+    const emailInput = qs('#authEmail');
+    const rememberCheckbox = qs('#rememberMe');
+    if (emailInput) emailInput.value = remembered;
+    if (rememberCheckbox) rememberCheckbox.checked = true;
+  }
 }
 
 function closeAuthModal() {
@@ -330,6 +380,10 @@ async function handleAuth() {
       const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
       if (error) throw error;
     }
+    // remember me 처리
+    const remember = qs('#rememberMe') && qs('#rememberMe').checked;
+    if (remember) localStorage.setItem('rememberEmail', email);
+    else localStorage.removeItem('rememberEmail');
     closeAuthModal();
   } catch (err) {
     console.error("[auth error]", err);
@@ -386,9 +440,18 @@ function bindEvents() {
     }
 
     try {
-      await createPost({ title, body, pledge_id });
+      // 파일 업로드 처리
+      const fileInput = qs('#postFile');
+      let fileUrl = null;
+      if (fileInput && fileInput.files && fileInput.files[0]) {
+        fileUrl = await uploadFileToStorage(fileInput.files[0]);
+      }
+
+      const contentPayload = fileUrl ? { text: `${title}\n\n${body}`, file_url: fileUrl } : `${title}\n\n${body}`;
+      await createPost({ title, body, pledge_id, content: contentPayload });
       qs("#postTitle").value = "";
       qs("#postContent").value = "";
+      if (fileInput) { fileInput.value = ''; const prev = qs('#postFilePreview'); if (prev) prev.innerHTML = ''; }
       await loadCommunityForCandidate();
       renderPosts();
     } catch (err) {
@@ -397,33 +460,140 @@ function bindEvents() {
     }
   });
 
+  // 파일 미리보기
+  const postFileInput = qs('#postFile');
+  if (postFileInput) {
+    postFileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      const prev = qs('#postFilePreview');
+      if (!prev) return;
+      if (!file) { prev.innerHTML = ''; return; }
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => { prev.innerHTML = `<img src="${reader.result}" style="max-width:100%; max-height:140px; object-fit:cover; border-radius:8px;"/>`; };
+        reader.readAsDataURL(file);
+      } else {
+        prev.innerHTML = `<div class="caption">선택된 파일: ${file.name}</div>`;
+      }
+    });
+  }
+
+  // Enter 키로 로그인 제출 (auth inputs)
+  const authEmailInput = qs('#authEmail');
+  const authPasswordInput = qs('#authPassword');
+  [authEmailInput, authPasswordInput].forEach(el => { if (!el) return; el.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); handleAuth(); } }); });
+
+  // 소셜 로그인
+  const socialKakao = qs('#socialKakao');
+  const socialFacebook = qs('#socialFacebook');
+  if (socialKakao) socialKakao.addEventListener('click', () => supabaseClient.auth.signInWithOAuth({ provider: 'kakao' }).catch(e=>{console.warn(e); alert('소셜 로그인 실패');}));
+  if (socialFacebook) socialFacebook.addEventListener('click', () => supabaseClient.auth.signInWithOAuth({ provider: 'facebook' }).catch(e=>{console.warn(e); alert('소셜 로그인 실패');}));
+
+  // Enter + Space 줄바꿈 처리 (postContent)
+  const postContentEl = qs('#postContent');
+  if (postContentEl) {
+    let lastWasEnter = false;
+    postContentEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); lastWasEnter = true; setTimeout(()=> lastWasEnter = false, 800); return; }
+      if (ev.key === ' ' && lastWasEnter) { const el = ev.target; const start = el.selectionStart; const end = el.selectionEnd; const value = el.value; el.value = value.slice(0, start) + '\n' + value.slice(end); el.selectionStart = el.selectionEnd = start + 1; lastWasEnter = false; ev.preventDefault(); }
+    });
+  }
+
   // 댓글 작성 (이벤트 위임)
   qs("#postList").addEventListener("click", async (e) => {
+    // 댓글 작성
     const postId = e.target.getAttribute("data-comment-submit");
-    if (!postId) return;
-    if (!state.user) {
-      alert("댓글 작성을 위해 로그인이 필요합니다.");
-      openAuthModal("login");
+    if (postId) {
+      if (!state.user) {
+        alert("댓글 작성을 위해 로그인이 필요합니다.");
+        openAuthModal("login");
+        return;
+      }
+
+      const textarea = qs(`textarea[data-comment-input="${postId}"]`);
+      if (!textarea) return;
+      const content = textarea.value.trim();
+      if (!content) {
+        alert("댓글 내용을 입력하세요.");
+        return;
+      }
+
+      try {
+        await createComment(postId, content);
+        textarea.value = "";
+        await loadCommunityForCandidate();
+        renderPosts();
+      } catch (err) {
+        console.error("[createComment error]", err);
+        alert(`오류: ${err?.message ?? "댓글 작성 실패"}`);
+      }
       return;
     }
 
-    const textarea = qs(`textarea[data-comment-input="${postId}"]`);
-    if (!textarea) return;
-    const content = textarea.value.trim();
-    if (!content) {
-      alert("댓글 내용을 입력하세요.");
+    // 게시글 편집
+    const editPostId = e.target.getAttribute('data-edit-post');
+    if (editPostId) {
+      const postCard = e.target.closest('.card.post');
+      if (!postCard) return;
+      const currentContent = (state.posts.find(p=>p.id===editPostId)?.content) || '';
+      const editor = document.createElement('div');
+      editor.innerHTML = `<textarea rows="4" class="edit-post-textarea">${currentContent}</textarea><div style="display:flex; gap:8px; margin-top:8px;"><button class="btn primary" data-save-post="${editPostId}">저장</button><button class="btn ghost" data-cancel-edit-post="${editPostId}">취소</button></div>`;
+      const contentEl = postCard.querySelector('.subtitle');
+      if (contentEl) contentEl.replaceWith(editor);
       return;
     }
 
-    try {
-      await createComment(postId, content);
-      textarea.value = "";
-      await loadCommunityForCandidate();
-      renderPosts();
-    } catch (err) {
-      console.error("[createComment error]", err);
-      alert(`오류: ${err?.message ?? "댓글 작성 실패"}`);
+    // 게시글 삭제
+    const deletePostId = e.target.getAttribute('data-delete-post');
+    if (deletePostId) {
+      if (!confirm('정말로 게시글을 삭제하시겠습니까?')) return;
+      try {
+        await deletePost(deletePostId);
+        await loadCommunityForCandidate();
+        renderPosts();
+      } catch (err) {
+        console.error('[deletePost error]', err);
+        alert(`오류: ${err?.message ?? '삭제 실패'}`);
+      }
+      return;
     }
+
+    // 댓글 삭제
+    const deleteCommentId = e.target.getAttribute('data-delete-comment');
+    if (deleteCommentId) {
+      if (!confirm('댓글을 삭제하시겠습니까?')) return;
+      try {
+        const { error } = await supabaseClient.from('comments').delete().eq('id', deleteCommentId);
+        if (error) throw error;
+        await loadCommunityForCandidate();
+        renderPosts();
+      } catch (err) {
+        console.error('[deleteComment error]', err);
+        alert(`오류: ${err?.message ?? '댓글 삭제 실패'}`);
+      }
+      return;
+    }
+
+    // 저장/취소 핸들러
+    const savePostId = e.target.getAttribute('data-save-post');
+    if (savePostId) {
+      const textarea = e.target.closest('.card.post').querySelector('.edit-post-textarea');
+      if (!textarea) return;
+      const newContent = textarea.value.trim();
+      if (!newContent) return alert('내용을 입력하세요.');
+      try {
+        await updatePost(savePostId, newContent);
+        await loadCommunityForCandidate();
+        renderPosts();
+      } catch (err) {
+        console.error('[updatePost error]', err);
+        alert(`오류: ${err?.message ?? '수정 실패'}`);
+      }
+      return;
+    }
+
+    const cancelEditId = e.target.getAttribute('data-cancel-edit-post');
+    if (cancelEditId) { await loadCommunityForCandidate(); renderPosts(); return; }
   });
 }
 

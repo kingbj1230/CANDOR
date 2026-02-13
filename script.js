@@ -69,6 +69,8 @@ const SUPABASE_KEY =
 
 // index.html에서 불러온 UMD 번들의 전역 객체 window.supabase 사용
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// expose for other page-specific scripts
+window.supabaseClient = supabaseClient;
 
 // 권한 체계: user_profiles.role 기반
 // - user: 일반 유저
@@ -215,6 +217,9 @@ const state = {
 // 짧은 셀렉터 헬퍼
 const qs = (sel) => document.querySelector(sel);
 const qsa = (sel) => Array.from(document.querySelectorAll(sel));
+
+// UI state for mypage nickname editing
+let mypageOriginalNickname = null;
 
 // 공약/후보 상태별 라벨 정의
 const badgeByStatus = {
@@ -444,12 +449,14 @@ async function createPledge(payload, evidence) {
 async function adminUpdateCandidateStatus(id, action) {
   if (!isAdmin()) throw new Error("관리자만 가능합니다.");
   const moderation_status = action === "approve" ? "approved" : "rejected";
-  const { data, error } = await supabaseClient.from("candidates").update({ status: moderation_status }).eq("id", id).select("id,status").maybeSingle();
+  const { data, error } = await supabaseClient.from("candidates").update({ status: moderation_status }).eq("id", id).select("id,status,user_id").maybeSingle();
   if (error) throw error;
   if (!data) throw new Error("상태 변경에 실패했습니다. (권한/RLS 또는 대상 없음)");
 
-  // 승인 시 approval_logs 기록 (공약 작성자 기여도는 pledges.user_id가 없으므로 스킵)
+  // 승인 시 approval_logs + contributor_stats RPC 호출
   if (action === "approve") {
+    const candidateUserId = data?.user_id ?? null;
+
     try {
       await supabaseClient.from("approval_logs").insert([
         {
@@ -462,6 +469,17 @@ async function adminUpdateCandidateStatus(id, action) {
     } catch (logErr) {
       console.warn("[approval_logs insert error]", logErr);
       // 로그 실패해도 승인은 진행
+    }
+
+    // 후보 작성자 기여도 증가 (user_id가 있는 경우만)
+    if (candidateUserId) {
+      try {
+        await supabaseClient.rpc("approve_candidate", { p_user_id: candidateUserId });
+        console.log("[approve_candidate RPC] 호출 성공:", candidateUserId);
+      } catch (rpcErr) {
+        console.warn("[approve_candidate RPC] 호출 실패", rpcErr);
+        // RPC 실패해도 승인 진행 (로그에만 기록)
+      }
     }
   }
 
@@ -490,7 +508,7 @@ async function adminUpdatePledgeStatus(id, action) {
   if (error) throw error;
   if (!data) throw new Error("상태 변경에 실패했습니다. (권한/RLS 또는 대상 없음)");
 
-  // 승인 시 approval_logs + contributor_stats 업데이트
+  // 승인 시 approval_logs + contributor_stats RPC 호출
   if (action === "approve") {
     try {
       // approval_logs 테이블이 없거나 RLS로 막히면 실패할 수 있음 → 승인은 진행
@@ -502,60 +520,20 @@ async function adminUpdatePledgeStatus(id, action) {
           action: "approve",
         },
       ]);
-
-      // 공약 작성자 기여도 증가 (user_id가 있는 경우만)
-      if (pledgeUserId) {
-        await supabaseClient
-          .rpc("increment_pledge_contribution", {
-            pledge_user_id: pledgeUserId,
-          })
-          .catch(async () => {
-          // RPC가 없으면 직접 업데이트 시도
-          // contributor_stats 테이블이 없거나 RLS로 막히면 실패할 수 있음 → 기여도 업데이트만 스킵
-          const { data: statsData, error: statsErr } = await supabaseClient
-            .from("contributor_stats")
-            .select("approved_pledges_count")
-            .eq("user_id", pledgeUserId)
-            .maybeSingle();
-          if (statsErr) throw statsErr;
-
-          if (statsData) {
-            await supabaseClient
-              .from("contributor_stats")
-              .update({
-                approved_pledges_count: (statsData.approved_pledges_count || 0) + 1,
-                last_approved_at: new Date().toISOString(),
-              })
-              .eq("user_id", pledgeUserId);
-          } else {
-            await supabaseClient.from("contributor_stats").insert([
-              {
-                user_id: pledgeUserId,
-                approved_pledges_count: 1,
-                last_approved_at: new Date().toISOString(),
-              },
-            ]);
-          }
-
-          // user_profiles.reputation_score도 업데이트 (승인된 공약 수 기준)
-          const { data: newStats, error: newStatsErr } = await supabaseClient
-            .from("contributor_stats")
-            .select("approved_pledges_count")
-            .eq("user_id", pledgeUserId)
-            .maybeSingle();
-          if (newStatsErr) throw newStatsErr;
-
-          if (newStats) {
-            await supabaseClient
-              .from("user_profiles")
-              .update({ reputation_score: newStats.approved_pledges_count || 0 })
-              .eq("user_id", pledgeUserId);
-          }
-        });
-      }
     } catch (logErr) {
-      console.warn("[approval_logs/contributor_stats update error]", logErr);
-      // 로그/통계 실패해도 승인은 진행
+      console.warn("[approval_logs insert error]", logErr);
+      // 로그 실패해도 승인은 진행
+    }
+
+    // 공약 작성자 기여도 증가 (user_id가 있는 경우만)
+    if (pledgeUserId) {
+      try {
+        await supabaseClient.rpc("approve_pledge", { p_user_id: pledgeUserId });
+        console.log("[approve_pledge RPC] 호출 성공:", pledgeUserId);
+      } catch (rpcErr) {
+        console.warn("[approve_pledge RPC] 호출 실패", rpcErr);
+        // RPC 실패해도 승인 진행 (로그에만 기록)
+      }
     }
   }
 
@@ -766,25 +744,75 @@ async function loadCommunity() {
 // 커뮤니티: 게시글 생성
 async function createPost({ content, candidate_id = null, pledge_id = null }) {
   if (!state.user) throw new Error("로그인이 필요합니다.");
+  // 파일 업로드는 선택적임. content 객체로 확장 가능
+  const payload = {
+    user_id: state.user.id,
+    content,
+    candidate_id,
+    pledge_id,
+    is_active: true,
+  };
 
-  const { data, error } = await supabaseClient
-    .from("posts")
-    .insert([
-      {
-        user_id: state.user.id,
-        content,
-        candidate_id,
-        pledge_id,
-        is_active: true,
-      },
-    ])
-    .select()
-    .single();
+  // 시도: 파일 URL이 content에 포함되어 있으면 posts에 전달
+  if (typeof content === "object" && content.file_url) {
+    payload.file_url = content.file_url;
+    // content 텍스트로 변환
+    payload.content = content.text || "";
+  }
 
-  if (error) throw error;
+  let inserted = await supabaseClient.from("posts").insert([payload]).select().single();
+  if (inserted.error) {
+    // DB 스키마에 file_url 컬럼이 없을 경우 대비: file_url 없이 재시도
+    const msg = inserted.error?.message || "";
+    if (/column .*file_url.* does not exist/i.test(msg)) {
+      const retryPayload = { ...payload };
+      delete retryPayload.file_url;
+      inserted = await supabaseClient.from("posts").insert([retryPayload]).select().single();
+    }
+  }
+  if (inserted.error) throw inserted.error;
 
+  const data = inserted.data;
   posts.unshift(data);
   commentsByPost[data.id] = [];
+  renderPosts();
+  return data;
+}
+
+// 파일을 Supabase 스토리지에 업로드하고 public URL 반환 (없으면 null)
+async function uploadFileToStorage(file) {
+  if (!file) return null;
+  try {
+    const key = `posts/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
+    const { error: uploadErr } = await supabaseClient.storage.from("post-uploads").upload(key, file, { upsert: true });
+    if (uploadErr) {
+      console.warn("[uploadFileToStorage] upload error", uploadErr);
+      return null;
+    }
+    const { data: urlData } = supabaseClient.storage.from("post-uploads").getPublicUrl(key);
+    return urlData?.publicUrl || null;
+  } catch (e) {
+    console.error("[uploadFileToStorage]", e);
+    return null;
+  }
+}
+
+async function updatePost(postId, newContent) {
+  if (!state.user) throw new Error("로그인이 필요합니다.");
+  const { data, error } = await supabaseClient.from("posts").update({ content: newContent }).eq("id", postId).select().maybeSingle();
+  if (error) throw error;
+  // 로컬 반영
+  posts = posts.map((p) => (p.id === postId ? { ...p, content: newContent } : p));
+  renderPosts();
+  return data;
+}
+
+async function deletePost(postId) {
+  if (!state.user) throw new Error("로그인이 필요합니다.");
+  const { data, error } = await supabaseClient.from("posts").delete().eq("id", postId).select().maybeSingle();
+  if (error) throw error;
+  posts = posts.filter((p) => p.id !== postId);
+  delete commentsByPost[postId];
   renderPosts();
   return data;
 }
@@ -815,22 +843,131 @@ async function createComment(post_id, content) {
 }
 
 // 히어로 패널: 이행률 상위 후보 표시
-function renderHighlight() {
-  if (!candidates.length) return;
+// Hall of Fame 렌더러: `contributor_stats`의 집계 필드(`approved_candidates_count`, `approved_pledges_count`)를 사용해
+// 상위 3명의 기여자(후보 승인 수 + 공약 승인 수 합)를 표시합니다.
+async function renderHighlight() {
+  const container = qs("#hofList");
+  if (!container) return;
 
-  const top = [...candidates].sort((a, b) => (b.progress || 0) - (a.progress || 0))[0];
-  qs("#highlightCandidate").textContent = top.name;
-  qs("#highlightProgress").style.width = `${top.progress || 0}%`;
-  const list = qs("#highlightPromises");
-  list.innerHTML = "";
+  try {
+    // contributor_stats 테이블: user_id (uuid), approved_candidates_count (int4), approved_pledges_count (int4), last_approved_at
+    // user_profiles와 LEFT JOIN하여 display name 가져오기
+    const { data, error } = await supabaseClient
+      .from("contributor_stats")
+      .select(
+        "user_id, approved_candidates_count, approved_pledges_count"
+      );
 
-  (top.promises || []).slice(0, 3).forEach((p) => {
-    const li = document.createElement("li");
-    li.className = "promise";
-    const badge = badgeByStatus[p.status] || badgeByStatus.progress;
-    li.innerHTML = `<span>${p.title}</span><span class="pill ${badge.cls}">${badge.text}</span>`;
-    list.appendChild(li);
-  });
+    if (error) {
+      console.warn("[HallOfFame] contributor_stats select failed", error);
+      // 폴백: 클라이언트에서 candidates/pledges를 스캔하여 간단 집계를 시도합니다.
+      const fallbackOk = await fallbackHallOfFameAggregation(container);
+      if (fallbackOk) return;
+      container.innerHTML = "<li>데이터를 불러오지 못했거나 활동 중인 기여자가 없습니다.</li>";
+      return;
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+      container.innerHTML = "<li>활발한 기여자가 아직 없습니다. 첫 기여자가 되어보세요!</li>";
+      return;
+    }
+
+    // 각 기여자의 총 기여 수 계산 (승인된 후보 수 + 승인된 공약 수)
+    const entries = data.map((c) => {
+      const candidatesCount = Number(c.approved_candidates_count || 0);
+      const pledgesCount = Number(c.approved_pledges_count || 0);
+      return {
+        user_id: c.user_id,
+        count: candidatesCount + pledgesCount,
+      };
+    });
+
+    // 내림차순 정렬 후 상위 3명 선택
+    entries.sort((a, b) => b.count - a.count);
+    const top = entries.slice(0, 3);
+
+    if (top.length === 0 || top[0].count === 0) {
+      container.innerHTML = "<li>활발한 기여자가 아직 없습니다. 첫 기여자가 되어보세요!</li>";
+      return;
+    }
+
+    // user_profiles에서 display name 가져오기 (optional)
+    let displayNames = new Map();
+    try {
+      const userIds = top.map(e => e.user_id).filter(Boolean);
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabaseClient
+          .from("user_profiles")
+          .select("user_id, nickname, username, full_name, email")
+          .in("user_id", userIds);
+        if (profiles) {
+          profiles.forEach(p => {
+            const display = p.nickname || p.username || p.full_name || p.email || String(p.user_id);
+            displayNames.set(p.user_id, display);
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("[Hall of Fame] user_profiles 조회 실패, UUID로 표시합니다", e);
+    }
+
+    // 표시
+    for (let i = 0; i < 3; i++) {
+      const li = qs(`#hof-${i + 1}`);
+      const e = top[i];
+      if (!li) continue;
+      if (!e) {
+        li.textContent = `${i + 1}위: — (기여 0)`;
+      } else {
+        const display = displayNames.get(e.user_id) || e.user_id || "—";
+        li.textContent = `${i + 1}위: ${display} (기여 ${e.count})`;
+      }
+    }
+  } catch (err) {
+    console.error("[renderHighlight -> HallOfFame]", err);
+    container.innerHTML = "<li>데이터를 불러오지 못했거나 활동 중인 기여자가 없습니다.</li>";
+  }
+}
+
+// 간단 폴백: `candidates`와 `pledges`를 조회해 작성자 ID 필드를 탐색하고 합산합니다.
+async function fallbackHallOfFameAggregation(container) {
+  try {
+    const tables = ["candidates", "pledges"];
+    const counts = new Map();
+
+    for (const t of tables) {
+      const { data, error } = await supabaseClient.from(t).select("id, user_id, author, author_id, created_by, nickname, full_name, email").limit(1000);
+      if (error || !Array.isArray(data)) continue;
+      data.forEach((row) => {
+        const uid = row.user_id || row.author_id || row.author || row.created_by || null;
+        const key = uid || (row.email ? `email:${row.email}` : null);
+        if (!key) return;
+        const prev = counts.get(key) || { count: 0, display: row.nickname || row.full_name || row.email || String(key) };
+        prev.count += 1;
+        counts.set(key, prev);
+      });
+    }
+
+    if (counts.size === 0) return false;
+
+    const entries = Array.from(counts.entries()).map(([k, v]) => ({ key: k, display: v.display, count: v.count }));
+    entries.sort((a, b) => b.count - a.count);
+    const top = entries.slice(0, 3);
+    for (let i = 0; i < 3; i++) {
+      const li = qs(`#hof-${i + 1}`);
+      const e = top[i];
+      if (!li) continue;
+      if (!e) {
+        li.textContent = `${i + 1}위: — (기여 0)`;
+      } else {
+        li.textContent = `${i + 1}위: ${e.display} (기여 ${e.count})`;
+      }
+    }
+    return true;
+  } catch (e) {
+    console.warn('[fallbackHallOfFameAggregation] failed', e);
+    return false;
+  }
 }
 
 function renderCandidates() {
@@ -1161,7 +1298,6 @@ function renderMypage() {
   // 프로필 (닉네임은 profiles 테이블 또는 user_profiles 확장으로 분리 가능)
   const nicknameInput = qs("#mypageNickname");
   const saveNickBtn = qs("#saveNicknameBtn");
-  const refreshBtn = qs("#refreshMypageBtn");
   const mypageCreatedAtEl = qs("#mypageCreatedAt");
   const profileHintEl = qs("#profileHint");
 
@@ -1169,16 +1305,20 @@ function renderMypage() {
     if (nicknameInput) nicknameInput.value = "";
     if (nicknameInput) nicknameInput.disabled = true;
     if (saveNickBtn) saveNickBtn.disabled = true;
-    if (refreshBtn) refreshBtn.disabled = true;
+    const editBtn = qs('#editNicknameBtn'); if (editBtn) { editBtn.disabled = true; editBtn.style.display = 'none'; }
+    if (saveNickBtn) saveNickBtn.style.display = 'none';
     if (mypageCreatedAtEl) mypageCreatedAtEl.textContent = "-";
     if (profileHintEl) profileHintEl.textContent = "로그인 후 프로필/활동/북마크를 확인할 수 있습니다.";
   } else {
-    if (refreshBtn) refreshBtn.disabled = false;
+    // no refresh button: keep controls enabled for logged-in users
     // 닉네임은 별도 profiles 테이블 또는 user_profiles 확장 필요 (현재는 임시로 이메일 앞부분 사용)
     if (nicknameInput) nicknameInput.value = email ? email.split("@")[0] : "";
     if (nicknameInput) nicknameInput.disabled = true; // user_profiles에 nickname 컬럼이 없으므로 비활성화
-    if (saveNickBtn) saveNickBtn.disabled = true;
-    if (mypageCreatedAtEl) mypageCreatedAtEl.textContent = userProfile?.created_at ? (userProfile.created_at.slice(0, 10) || "-") : "-";
+    if (saveNickBtn) { saveNickBtn.disabled = true; saveNickBtn.style.display = 'none'; }
+    const editBtn = qs('#editNicknameBtn'); if (editBtn) { editBtn.disabled = false; editBtn.style.display = 'inline-block'; }
+    // Prefer created_at from user_profiles, fallback to auth user.created_at
+    const createdVal = userProfile?.created_at || state.user?.created_at || null;
+    if (mypageCreatedAtEl) mypageCreatedAtEl.textContent = createdVal ? String(createdVal).slice(0, 10) : "-";
     if (profileHintEl) profileHintEl.textContent = `역할: ${roleText} | 기여 점수: ${reputation} | 상태: ${userProfile?.status || "active"}`;
   }
 
@@ -1287,13 +1427,20 @@ function renderPosts() {
       .filter(Boolean)
       .join(" ");
 
+    const canEdit = state.user && p.user_id === state.user.id;
+    const canDelete = state.user && (p.user_id === state.user.id || (userProfile && userProfile.role === 'admin'));
+
     div.innerHTML = `
       <div class="post__header">
         <div>
           <h4 style="margin:0;">${title}</h4>
           <div class="post__meta">${author} · ${createdAt} · 댓글 ${comments.length}</div>
         </div>
-        <span class="pill neutral">토론</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span class="pill neutral">토론</span>
+          ${canEdit ? `<button class="btn ghost tiny" data-edit-post="${p.id}">수정</button>` : ""}
+          ${canDelete ? `<button class="btn danger tiny" data-delete-post="${p.id}">삭제</button>` : ""}
+        </div>
       </div>
       <div class="pill-row">${tagHtml}</div>
       <p class="subtitle">${bodyPreview || ""}</p>
@@ -1302,7 +1449,8 @@ function renderPosts() {
           ${comments
             .map((c) => {
               const cDate = (c.created_at || "").slice(0, 10);
-              return `<li><span class="comment-content">${c.content}</span><span class="comment-meta">${cDate}</span></li>`;
+              const canDeleteComment = state.user && (c.user_id === state.user.id || (userProfile && userProfile.role === 'admin'));
+              return `<li><span class="comment-content">${c.content}</span><span class="comment-meta">${cDate}</span>${canDeleteComment ? `<button class="btn ghost tiny" data-delete-comment="${c.id}">삭제</button>` : ''}</li>`;
             })
             .join("")}
         </ul>
@@ -1341,6 +1489,26 @@ function openAuthModal(mode = "login") {
   qs("#modalTitle").textContent = mode === "login" ? "로그인" : "회원가입";
   qs("#authModal").classList.add("show");
   qs("#authModal").setAttribute("aria-hidden", "false");
+  // Remember me: prefills
+  const remembered = localStorage.getItem('rememberEmail');
+  if (remembered) {
+    const emailInput = qs('#authEmail');
+    const rememberCheckbox = qs('#rememberMe');
+    if (emailInput) emailInput.value = remembered;
+    if (rememberCheckbox) rememberCheckbox.checked = true;
+  }
+  // show nickname only for signup
+  const nickContainer = qs('#authNicknameContainer');
+  const nickInput = qs('#authNickname');
+  if (nickContainer) nickContainer.style.display = (mode === 'signup') ? 'block' : 'none';
+  if (nickInput) {
+    if (mode === 'signup') {
+      nickInput.required = true;
+    } else {
+      nickInput.required = false;
+      nickInput.value = '';
+    }
+  }
 }
 
 // 인증 모달 닫기
@@ -1533,10 +1701,27 @@ async function handleAuth() {
   try {
     // state.mode 값에 따라 로그인/회원가입 처리
     if (state.mode === "signup") {
+      const nickname = qs('#authNickname') ? qs('#authNickname').value.trim() : '';
+      if (!nickname) {
+        alert('닉네임을 입력하세요. (회원가입 시 필수)');
+        return;
+      }
       const { data, error } = await supabaseClient.auth.signUp({ email, password });
       if (error) throw error;
-      alert("회원가입 요청 완료! 이메일 인증이 필요할 수 있어요.");
       console.log("[signup] response", data);
+      // Try to create a user_profiles row with the nickname if the new user id is available.
+      const newUserId = data?.user?.id || data?.id || data?.userId || null;
+      if (newUserId && nickname) {
+        try {
+          const { error: upErr } = await supabaseClient.from('user_profiles').insert([
+            { user_id: newUserId, nickname, role: 'user', status: 'active', reputation_score: 0 }
+          ]);
+          if (upErr) console.warn('[signup] user_profiles insert failed', upErr);
+        } catch (e) {
+          console.warn('[signup] user_profiles insert exception', e);
+        }
+      }
+      alert("회원가입 요청 완료! 이메일 인증이 필요할 수 있어요.");
     } else {
       const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
       if (error) throw error;
@@ -1544,6 +1729,11 @@ async function handleAuth() {
     }
 
     // 세션/유저 반영은 onAuthStateChange에서 처리됨
+    // remember me
+    const remember = qs('#rememberMe') && qs('#rememberMe').checked;
+    if (remember) localStorage.setItem('rememberEmail', email);
+    else localStorage.removeItem('rememberEmail');
+
     closeAuthModal();
   } catch (err) {
     console.error("[auth error]", err);
@@ -1554,15 +1744,18 @@ async function handleAuth() {
 
 // 이벤트 바인딩 (검색, 필터, 인증, 커뮤니티 작성)
 function bindEvents() {
-  qs("#searchInput").addEventListener("input", (e) => {
+  const _searchInput = qs("#searchInput");
+  if (_searchInput) _searchInput.addEventListener("input", (e) => {
     state.search = e.target.value;
     renderCandidates();
   });
-  qs("#statusFilter").addEventListener("change", (e) => {
+  const _statusFilter = qs("#statusFilter");
+  if (_statusFilter) _statusFilter.addEventListener("change", (e) => {
     state.filter = e.target.value;
     renderCandidates();
   });
-  qs("#loginBtn").addEventListener("click", async () => {
+  const _loginBtn = qs("#loginBtn");
+  if (_loginBtn) _loginBtn.addEventListener("click", async () => {
     // 로그인 상태면 "로그아웃" 동작
     if (state.user) {
       await supabaseClient.auth.signOut();
@@ -1570,7 +1763,8 @@ function bindEvents() {
     }
     openAuthModal("login");
   });
-  qs("#signupBtn").addEventListener("click", () => openAuthModal("signup"));
+  const _signupBtn = qs("#signupBtn");
+  if (_signupBtn) _signupBtn.addEventListener("click", () => openAuthModal("signup"));
   // 마이페이지 버튼이 있는 경우에만 이벤트 리스너 추가
   const openMypageBtn = qs("#openMypageBtn");
   if (openMypageBtn) {
@@ -1582,14 +1776,37 @@ function bindEvents() {
       window.open("mypage.html", "_blank");
     });
   }
-  qs("#closeModal").addEventListener("click", closeAuthModal);
-  qs("#authSubmit").addEventListener("click", handleAuth);
+  const _closeModal = qs("#closeModal");
+  if (_closeModal) _closeModal.addEventListener("click", closeAuthModal);
+  const _authSubmit = qs("#authSubmit");
+  if (_authSubmit) _authSubmit.addEventListener("click", handleAuth);
+
+  // Enter 키로 로그인 제출
+  const authEmailInput = qs('#authEmail');
+  const authPasswordInput = qs('#authPassword');
+  [authEmailInput, authPasswordInput].forEach(el => {
+    if (!el) return;
+    el.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        handleAuth();
+      }
+    });
+  });
+
+  // 소셜 로그인 버튼
+  const socialKakao = qs('#socialKakao');
+  const socialFacebook = qs('#socialFacebook');
+  if (socialKakao) socialKakao.addEventListener('click', () => supabaseClient.auth.signInWithOAuth({ provider: 'kakao' }).catch(e=>{console.warn(e); alert('소셜 로그인 실패');}));
+  if (socialFacebook) socialFacebook.addEventListener('click', () => supabaseClient.auth.signInWithOAuth({ provider: 'facebook' }).catch(e=>{console.warn(e); alert('소셜 로그인 실패');}));
 
   // 공약 출처 셀렉트 변경 시 신규 입력 필드 토글
-  qs("#pledgeSourceSelect").addEventListener("change", toggleNewSourceFields);
+  const _pledgeSourceSelect = qs("#pledgeSourceSelect");
+  if (_pledgeSourceSelect) _pledgeSourceSelect.addEventListener("change", toggleNewSourceFields);
 
   // 커뮤니티 게시글 작성 처리
-  qs("#postSubmit").addEventListener("click", async () => {
+  const _postSubmit = qs("#postSubmit");
+  if (_postSubmit) _postSubmit.addEventListener("click", async () => {
     const title = qs("#postTitle").value.trim();
     const contentBody = qs("#postContent").value.trim();
 
@@ -1609,9 +1826,19 @@ function bindEvents() {
     const finalContent = `${title}\n\n${contentBody}`;
 
     try {
-      await createPost({ content: finalContent, candidate_id: candidate_id || null, pledge_id: pledge_id || null });
+      // 파일 업로드 처리
+      const fileInput = qs('#postFile');
+      let fileUrl = null;
+      if (fileInput && fileInput.files && fileInput.files[0]) {
+        fileUrl = await uploadFileToStorage(fileInput.files[0]);
+      }
+
+      const contentPayload = fileUrl ? { text: finalContent, file_url: fileUrl } : finalContent;
+
+      await createPost({ content: contentPayload, candidate_id: candidate_id || null, pledge_id: pledge_id || null });
       qs("#postTitle").value = "";
       qs("#postContent").value = "";
+      if (fileInput) { fileInput.value = ''; const prev = qs('#postFilePreview'); if (prev) prev.innerHTML = ''; }
     } catch (err) {
       console.error("[createPost error]", err);
       const msg = err?.message ?? "게시글 작성에 실패했습니다.";
@@ -1619,8 +1846,27 @@ function bindEvents() {
     }
   });
 
+  // 파일 선택 미리보기
+  const postFileInput = qs('#postFile');
+  if (postFileInput) {
+    postFileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      const prev = qs('#postFilePreview');
+      if (!prev) return;
+      if (!file) { prev.innerHTML = ''; return; }
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => { prev.innerHTML = `<img src="${reader.result}" style="max-width:100%; max-height:120px; object-fit:cover; border-radius:8px;"/>`; };
+        reader.readAsDataURL(file);
+      } else {
+        prev.innerHTML = `<div class="caption">선택된 파일: ${file.name}</div>`;
+      }
+    });
+  }
+
   // 커뮤니티 필터
-  qs("#communityFilterCandidate").addEventListener("change", (e) => {
+  const _communityFilterCandidate = qs("#communityFilterCandidate");
+  if (_communityFilterCandidate) _communityFilterCandidate.addEventListener("change", (e) => {
     state.community.candidate_id = e.target.value || null;
     // 후보 필터가 바뀌면 공약 필터는 유지하되, 후보가 달라 불일치할 수 있어 자동 해제
     if (state.community.pledge_id) {
@@ -1633,11 +1879,13 @@ function bindEvents() {
     }
     renderPosts();
   });
-  qs("#communityFilterPledge").addEventListener("change", (e) => {
+  const _communityFilterPledge = qs("#communityFilterPledge");
+  if (_communityFilterPledge) _communityFilterPledge.addEventListener("change", (e) => {
     state.community.pledge_id = e.target.value || null;
     renderPosts();
   });
-  qs("#clearCommunityFilter").addEventListener("click", () => {
+  const _clearCommunityFilter = qs("#clearCommunityFilter");
+  if (_clearCommunityFilter) _clearCommunityFilter.addEventListener("click", () => {
     state.community.candidate_id = null;
     state.community.pledge_id = null;
     qs("#communityFilterCandidate").value = "";
@@ -1646,61 +1894,171 @@ function bindEvents() {
   });
 
   // 커뮤니티 댓글 작성 (이벤트 위임)
-  qs("#postList").addEventListener("click", async (e) => {
+  const _postList = qs("#postList");
+  if (_postList) _postList.addEventListener("click", async (e) => {
+    // 댓글 작성
     const postId = e.target.getAttribute("data-comment-submit");
-    if (!postId) return;
+    if (postId) {
+      if (!state.user) {
+        alert("댓글 작성을 위해 로그인이 필요합니다.");
+        openAuthModal("login");
+        return;
+      }
 
-    if (!state.user) {
-      alert("댓글 작성을 위해 로그인이 필요합니다.");
-      openAuthModal("login");
+      const textarea = qs(`textarea[data-comment-input="${postId}"]`);
+      if (!textarea) return;
+      const content = textarea.value.trim();
+      if (!content) {
+        alert("댓글 내용을 입력하세요.");
+        return;
+      }
+
+      try {
+        await createComment(postId, content);
+        textarea.value = "";
+      } catch (err) {
+        console.error("[createComment error]", err);
+        const msg = err?.message ?? "댓글 작성에 실패했습니다.";
+        alert(`오류: ${msg}`);
+      }
       return;
     }
 
-    const textarea = qs(`textarea[data-comment-input="${postId}"]`);
-    if (!textarea) return;
-    const content = textarea.value.trim();
-    if (!content) {
-      alert("댓글 내용을 입력하세요.");
+    // 게시글 편집/삭제
+    const editPostId = e.target.getAttribute("data-edit-post");
+    if (editPostId) {
+      const postCard = e.target.closest('.card.post');
+      if (!postCard) return;
+      // 기존 내용 표시 대신 편집 textarea 삽입
+      const contentP = postCard.querySelector('.subtitle');
+      const currentContent = (posts.find(p=>p.id===editPostId)?.content) || '';
+      const editor = document.createElement('div');
+      editor.innerHTML = `<textarea rows="4" class="edit-post-textarea">${currentContent}</textarea><div style="display:flex; gap:8px; margin-top:8px;"><button class="btn primary" data-save-post="${editPostId}">저장</button><button class="btn ghost" data-cancel-edit-post="${editPostId}">취소</button></div>`;
+      if (contentP) contentP.replaceWith(editor);
       return;
     }
 
-    try {
-      await createComment(postId, content);
-      textarea.value = "";
-    } catch (err) {
-      console.error("[createComment error]", err);
-      const msg = err?.message ?? "댓글 작성에 실패했습니다.";
-      alert(`오류: ${msg}`);
+    const deletePostId = e.target.getAttribute("data-delete-post");
+    if (deletePostId) {
+      if (!confirm('정말로 게시글을 삭제하시겠습니까?')) return;
+      try {
+        await deletePost(deletePostId);
+        alert('게시글이 삭제되었습니다.');
+      } catch (err) {
+        console.error('[deletePost error]', err);
+        alert(`오류: ${err?.message ?? '삭제 실패'}`);
+      }
+      return;
+    }
+
+    // 댓글 삭제
+    const deleteCommentId = e.target.getAttribute('data-delete-comment');
+    if (deleteCommentId) {
+      if (!confirm('댓글을 삭제하시겠습니까?')) return;
+      try {
+        const { error } = await supabaseClient.from('comments').delete().eq('id', deleteCommentId);
+        if (error) throw error;
+        // 로컬 반영
+        for (const key of Object.keys(commentsByPost)) {
+          commentsByPost[key] = (commentsByPost[key] || []).filter(c => String(c.id) !== String(deleteCommentId));
+        }
+        renderPosts();
+      } catch (err) {
+        console.error('[deleteComment error]', err);
+        alert(`오류: ${err?.message ?? '댓글 삭제 실패'}`);
+      }
+      return;
+    }
+
+    // 저장/취소 핸들러
+    const savePostId = e.target.getAttribute('data-save-post');
+    if (savePostId) {
+      const textarea = e.target.closest('.card.post').querySelector('.edit-post-textarea');
+      if (!textarea) return;
+      const newContent = textarea.value.trim();
+      if (!newContent) return alert('내용을 입력하세요.');
+      try {
+        await updatePost(savePostId, newContent);
+        alert('수정되었습니다.');
+      } catch (err) {
+        console.error('[updatePost error]', err);
+        alert(`오류: ${err?.message ?? '수정 실패'}`);
+      }
+      return;
+    }
+
+    const cancelEditId = e.target.getAttribute('data-cancel-edit-post');
+    if (cancelEditId) {
+      // 재렌더로 원상 복구
+      renderPosts();
+      return;
     }
   });
 
   // Close modal on backdrop click
-  qs("#authModal").addEventListener("click", (e) => {
+  const _authModalBackdrop = qs("#authModal");
+  if (_authModalBackdrop) _authModalBackdrop.addEventListener("click", (e) => {
     if (e.target.id === "authModal") closeAuthModal();
   });
 
+  // Enter + Space 를 줄바꿈으로 처리 (post content)
+  const postContentEl = qs('#postContent');
+  if (postContentEl) {
+    let lastWasEnter = false;
+    postContentEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        // prevent default newline; wait for space
+        ev.preventDefault();
+        lastWasEnter = true;
+        setTimeout(() => (lastWasEnter = false), 800);
+        return;
+      }
+      if (ev.key === ' ' && lastWasEnter) {
+        // insert newline at cursor
+        const el = ev.target;
+        const start = el.selectionStart; const end = el.selectionEnd;
+        const value = el.value;
+        el.value = value.slice(0, start) + '\n' + value.slice(end);
+        el.selectionStart = el.selectionEnd = start + 1;
+        lastWasEnter = false;
+        ev.preventDefault();
+      }
+    });
+  }
+
   // 후보 추가 관련 이벤트
-  qs("#addCandidateBtn").addEventListener("click", openCandidateModal);
-  qs("#closeCandidateModal").addEventListener("click", closeCandidateModal);
-  qs("#cancelCandidateBtn").addEventListener("click", closeCandidateModal);
-  qs("#candidateForm").addEventListener("submit", handleCandidateSubmit);
+  const _addCandidateBtn = qs("#addCandidateBtn");
+  if (_addCandidateBtn) _addCandidateBtn.addEventListener("click", openCandidateModal);
+  const _closeCandidateModalBtn = qs("#closeCandidateModal");
+  if (_closeCandidateModalBtn) _closeCandidateModalBtn.addEventListener("click", closeCandidateModal);
+  const _cancelCandidateBtn = qs("#cancelCandidateBtn");
+  if (_cancelCandidateBtn) _cancelCandidateBtn.addEventListener("click", closeCandidateModal);
+  const _candidateForm = qs("#candidateForm");
+  if (_candidateForm) _candidateForm.addEventListener("submit", handleCandidateSubmit);
 
   // 후보 모달 배경 클릭 시 닫기
-  qs("#candidateModal").addEventListener("click", (e) => {
+  const _candidateModal = qs("#candidateModal");
+  if (_candidateModal) _candidateModal.addEventListener("click", (e) => {
     if (e.target.id === "candidateModal") closeCandidateModal();
   });
 
   // 공약 추가 관련 이벤트
-  qs("#addPledgeBtn").addEventListener("click", openPledgeModal);
-  qs("#closePledgeModal").addEventListener("click", closePledgeModal);
-  qs("#cancelPledgeBtn").addEventListener("click", closePledgeModal);
-  qs("#pledgeForm").addEventListener("submit", handlePledgeSubmit);
-  qs("#pledgeModal").addEventListener("click", (e) => {
+  const _addPledgeBtn = qs("#addPledgeBtn");
+  if (_addPledgeBtn) _addPledgeBtn.addEventListener("click", openPledgeModal);
+  const _closePledgeModalBtn = qs("#closePledgeModal");
+  if (_closePledgeModalBtn) _closePledgeModalBtn.addEventListener("click", closePledgeModal);
+  const _cancelPledgeBtn = qs("#cancelPledgeBtn");
+  if (_cancelPledgeBtn) _cancelPledgeBtn.addEventListener("click", closePledgeModal);
+  const _pledgeForm = qs("#pledgeForm");
+  if (_pledgeForm) _pledgeForm.addEventListener("submit", handlePledgeSubmit);
+  const _pledgeModal = qs("#pledgeModal");
+  if (_pledgeModal) _pledgeModal.addEventListener("click", (e) => {
     if (e.target.id === "pledgeModal") closePledgeModal();
   });
 
   // 후보/공약 토론 및 증빙 버튼 (후보 카드 영역에서 위임)
-  qs("#candidateList").addEventListener("click", async (e) => {
+  const _candidateList = qs("#candidateList");
+  if (_candidateList) _candidateList.addEventListener("click", async (e) => {
     // 카드 클릭 이동: 버튼/링크 클릭은 제외
     const clickedButtonOrLink = e.target.closest("button") || e.target.closest("a");
     if (!clickedButtonOrLink) {
@@ -1813,25 +2171,107 @@ function bindEvents() {
   });
 
   // 증빙 모달 이벤트
-  qs("#closeEvidenceModal").addEventListener("click", closeEvidenceModal);
-  qs("#cancelEvidenceBtn").addEventListener("click", closeEvidenceModal);
-  qs("#evidenceModal").addEventListener("click", (e) => {
+  const _closeEvidenceModal = qs("#closeEvidenceModal");
+  if (_closeEvidenceModal) _closeEvidenceModal.addEventListener("click", closeEvidenceModal);
+  const _cancelEvidenceBtn = qs("#cancelEvidenceBtn");
+  if (_cancelEvidenceBtn) _cancelEvidenceBtn.addEventListener("click", closeEvidenceModal);
+  const _evidenceModal = qs("#evidenceModal");
+  if (_evidenceModal) _evidenceModal.addEventListener("click", (e) => {
     if (e.target.id === "evidenceModal") closeEvidenceModal();
   });
-  qs("#evidenceForm").addEventListener("submit", handleEvidenceSubmit);
+  const _evidenceForm = qs("#evidenceForm");
+  if (_evidenceForm) _evidenceForm.addEventListener("submit", handleEvidenceSubmit);
 
-  // 마이페이지 이벤트 - 마이페이지 섹션이 있는 경우에만
-  const refreshMypageBtn = qs("#refreshMypageBtn");
-  if (refreshMypageBtn) {
-    refreshMypageBtn.addEventListener("click", async () => {
-      await refreshMypageData();
-    });
-  }
+  // 마이페이지 이벤트 - (refresh button removed)
   // 닉네임 저장은 user_profiles에 nickname 컬럼 추가 후 활성화 가능
   const saveNicknameBtn = qs("#saveNicknameBtn");
   if (saveNicknameBtn) {
     saveNicknameBtn.addEventListener("click", async () => {
-      alert("닉네임 기능은 user_profiles 테이블에 nickname 컬럼 추가 후 사용 가능합니다.");
+      // Save nickname to user_profiles.nickname (defensive)
+      if (!state.user) return alert('로그인이 필요합니다.');
+      const nickInput = qs('#mypageNickname');
+      if (!nickInput) return;
+      const nickname = nickInput.value.trim();
+      if (!nickname) return alert('닉네임을 입력하세요.');
+      try {
+        // Try update existing profile row
+        const { data, error } = await supabaseClient.from('user_profiles').update({ nickname }).eq('user_id', state.user.id).select().maybeSingle();
+        if (error) {
+          // If column doesn't exist or update failed, try insert or show message
+          const msg = error?.message || '';
+          console.warn('[saveNickname] update error', error);
+          // show a helpful alert with Supabase error details for debugging
+          try {
+            alert(`닉네임 저장 실패(업데이트): ${msg}\n\n(콘솔에 상세 정보가 있습니다)`);
+            console.error('[saveNickname update error details]', error);
+          } catch (e) {}
+          if (/column .*nickname.* does not exist/i.test(msg)) {
+            return alert('서버쪽 user_profiles에 nickname 컬럼이 존재하지 않아 저장할 수 없습니다. 관리자에게 문의하세요.');
+          }
+          // Try insert fallback (if no profile row exists)
+          try {
+            const { data: ins, error: insErr } = await supabaseClient.from('user_profiles').insert([{ user_id: state.user.id, nickname, role: 'user', status: 'active', reputation_score: 0 }]).select().maybeSingle();
+            if (insErr) throw insErr;
+            userProfile = ins || userProfile;
+          } catch (ie) {
+            console.error('[saveNickname] insert fallback failed', ie);
+            return alert(`닉네임 저장 실패: ${ie?.message ?? ie}`);
+          }
+        } else {
+          // success: refresh local profile
+          userProfile = data || userProfile;
+        }
+
+        alert('닉네임이 저장되었습니다.');
+        // Disable editing UI and restore buttons
+        if (nickInput) {
+          // remove input listener if attached
+          if (nickInput._nickInputHandler) {
+            nickInput.removeEventListener('input', nickInput._nickInputHandler);
+            delete nickInput._nickInputHandler;
+          }
+          nickInput.disabled = true;
+        }
+        if (saveNicknameBtn) {
+          saveNicknameBtn.disabled = true;
+          saveNicknameBtn.style.display = 'none';
+        }
+        const editBtn = qs('#editNicknameBtn'); if (editBtn) { editBtn.disabled = false; editBtn.style.display = 'inline-block'; }
+        // update original value
+        mypageOriginalNickname = nickInput ? (nickInput.value || '').trim() : mypageOriginalNickname;
+        await refreshMypageData();
+      } catch (err) {
+        console.error('[saveNickname error]', err);
+        const msg = err?.message || err;
+        alert(`닉네임 저장 중 오류가 발생했습니다: ${msg}`);
+      }
+    });
+  }
+
+  // Edit nickname button enables the input and focuses it
+  const editNicknameBtn = qs('#editNicknameBtn');
+  if (editNicknameBtn) {
+    editNicknameBtn.addEventListener('click', () => {
+      const nickInput = qs('#mypageNickname');
+      const saveBtn = qs('#saveNicknameBtn');
+      if (!nickInput || !saveBtn) return;
+      // show save, hide edit
+      editNicknameBtn.style.display = 'none';
+      saveBtn.style.display = 'inline-block';
+      // enable input and focus
+      nickInput.disabled = false;
+      nickInput.focus();
+      // remember original value and disable save until changed
+      mypageOriginalNickname = (nickInput.value || '').trim();
+      saveBtn.disabled = true;
+
+      // input listener to enable save when changed
+      const onNickInput = (e) => {
+        const v = (e.target.value || '').trim();
+        saveBtn.disabled = v === mypageOriginalNickname;
+      };
+      nickInput._nickInputHandler = onNickInput;
+      nickInput.addEventListener('input', onNickInput);
     });
   }
 
@@ -1860,12 +2300,13 @@ function updateAuthUI() {
   const loginBtn = qs("#loginBtn");
   const signupBtn = qs("#signupBtn");
 
-  if (state.user) {
-    loginBtn.textContent = "로그아웃";
-    signupBtn.style.display = "none";
-  } else {
-    loginBtn.textContent = "로그인";
-    signupBtn.style.display = "";
+  if (loginBtn) {
+    if (state.user) loginBtn.textContent = "로그아웃";
+    else loginBtn.textContent = "로그인";
+  }
+  if (signupBtn) {
+    if (state.user) signupBtn.style.display = "none";
+    else signupBtn.style.display = "";
   }
 
   renderMypage();
@@ -1896,25 +2337,71 @@ async function initAuth() {
 }
 
 async function init() {
+  // (테마 설정 UI 제거됨)
   // 1) Supabase에서 candidates 불러오기 (실패/빈 결과면 fallback 사용)
-  await loadCandidatesFromSupabase();
+  try {
+    await loadCandidatesFromSupabase();
+  } catch (e) {
+    console.warn('[init] loadCandidatesFromSupabase failed', e);
+  }
 
   // 2) 커뮤니티 데이터 로드
-  await loadCommunity();
+  try {
+    await loadCommunity();
+  } catch (e) {
+    console.warn('[init] loadCommunity failed', e);
+  }
 
   // 3) 출처 로드(공약 모달용)
-  await loadFulfillmentSources();
+  try {
+    await loadFulfillmentSources();
+  } catch (e) {
+    console.warn('[init] loadFulfillmentSources failed', e);
+  }
 
-  // 4) UI 렌더
-  renderPledgeCandidateOptions();
-  renderCommunityTargetOptions();
-  renderSourceOptions();
-  renderHighlight();
-  renderCandidates();
-  renderPosts();
-  initStats();
+  // 4) UI 렌더 (가능한 부분만 시도)
+  try { renderPledgeCandidateOptions(); } catch (e) { console.warn('[init] renderPledgeCandidateOptions', e); }
+  try { renderCommunityTargetOptions(); } catch (e) { console.warn('[init] renderCommunityTargetOptions', e); }
+  try { renderSourceOptions(); } catch (e) { console.warn('[init] renderSourceOptions', e); }
+  try { renderHighlight(); } catch (e) { console.warn('[init] renderHighlight', e); }
+  try { renderCandidates(); } catch (e) { console.warn('[init] renderCandidates', e); }
+  try { renderPosts(); } catch (e) { console.warn('[init] renderPosts', e); }
+  try { initStats(); } catch (e) { console.warn('[init] initStats', e); }
+  // 실제 회원수 로드
+  try { await loadUserCount(); } catch (e) { console.warn('[init] loadUserCount', e); }
+
   bindEvents();
-  initAuth();
+  // initAuth는 항상 호출해 세션을 읽고 로그인 상태를 반영하게 함
+  try { initAuth(); } catch (e) { console.warn('[init] initAuth failed', e); }
+}
+
+// Theme settings UI removed
+
+// user_profiles 테이블을 조회하여 실제 회원수를 `#statUsers`에 반영합니다.
+// anon 키 / RLS 제약으로 실패할 수 있으므로 여러 방법으로 시도합니다.
+async function loadUserCount() {
+  const el = qs('#statUsers');
+  if (!el) return;
+  try {
+    // 1) 카운트 헤더 방식 시도
+    const { data, error, count } = await supabaseClient.from('user_profiles').select('id', { count: 'exact' });
+    if (!error && typeof count === 'number') {
+      el.textContent = String(count);
+      return;
+    }
+
+    // 2) 전체 조회 후 길이 사용 (fallback)
+    const { data: all, error: err2 } = await supabaseClient.from('user_profiles').select('id');
+    if (!err2 && Array.isArray(all)) {
+      el.textContent = String(all.length);
+      return;
+    }
+  } catch (e) {
+    console.warn('[loadUserCount] failed', e);
+  }
+
+  // 최종 fallback: 비어있거나 조회 불가 시 대시 표시
+  el.textContent = '-';
 }
 
 document.addEventListener("DOMContentLoaded", () => {

@@ -16,6 +16,19 @@
   --shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
 }
 
+/* Light theme overrides (applied when body.theme-light is set) */
+.theme-light {
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --muted: #5b6b85;
+  --primary: #2b56f5;
+  --primary-dark: #1f42c9;
+  --success: #1f9d58;
+  --danger: #e14b4b;
+  --border: #e6eef8;
+  color: #0b1220;
+}
+
 /* 전체 바디 스타일 */
 body {
   margin: 0;
@@ -546,6 +559,45 @@ textarea {
   cursor: pointer;
 }
 
+/* Auth modal specific styles */
+.modal__content.auth-modal {
+  width: min(480px, 94vw);
+  padding: 24px;
+}
+
+.auth-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.auth-input {
+  background: rgba(255,255,255,0.03);
+  color: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 15px;
+}
+
+.auth-row {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+}
+
+.social-row {
+  display:flex;
+  gap:8px;
+  flex-direction:column;
+}
+
+@media(min-width:520px) {
+  .social-row { flex-direction:row; }
+}
+
+.social-row .btn { flex:1; }
+
 /* 댓글 UI */
 .comments {
   margin-top: 10px;
@@ -634,4 +686,51 @@ textarea {
   .stats {
     flex-wrap: wrap;
   }
+}
+
+.auth-checks {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+
+.auth-links {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin: 0 0 12px;
+}
+
+/* 체크박스 오프셋: 아래 `.remember-checkbox`의 `transform: translateX(...)` 값을 변경하면
+   체크박스(입력 요소)를 오른쪽으로 이동시킬 수 있습니다. 예: translateX(10px).
+   - 이 값을 음수로 바꾸면 왼쪽으로 이동합니다.
+   - `margin-left` 대신 `transform`을 사용하면 레이아웃 흐름에 영향을 덜 줍니다.
+*/
+.remember-checkbox {
+  display: inline-block; /* transform이 정상 동작하도록 보장 */
+  transform: translateX(0); /* 체크박스 오프셋 제거: 버튼과 가깝게 정렬 */
+}
+
+/* 로그인 버튼 중앙 정렬 컨테이너 */
+.auth-submit-center {
+  display: flex;
+  justify-content: center;
+  margin: 6px 0 12px;
+}
+
+/* Make the auth submit button wider */
+.auth-submit-center .btn {
+  width: 72%;
+  max-width: 420px;
+  padding: 12px 20px;
+  font-size: 16px;
+}
+
+/* (Settings modal removed) */
+
+/* Smooth theme transition */
+body {
+  transition: background 220ms ease, color 220ms ease;
 }

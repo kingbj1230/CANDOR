@@ -79,8 +79,10 @@
 
             <div class="post-form" style="width:100%; max-width:none;">
               <input id="postTitle" type="text" placeholder="제목" />
-              <textarea id="postContent" rows="3" placeholder="내용을 입력하세요"></textarea>
-              <button class="btn primary" id="postSubmit">등록</button>
+                <textarea id="postContent" rows="3" placeholder="내용을 입력하세요"></textarea>
+                <input id="postFile" type="file" accept="image/*,video/*" />
+                <div id="postFilePreview" style="max-width:220px; max-height:140px; overflow:hidden;"></div>
+                <button class="btn primary" id="postSubmit">등록</button>
             </div>
 
             <div class="divider" style="margin:14px 0;"></div>
@@ -92,14 +94,33 @@
   </main>
 
   <div class="modal" id="authModal" aria-hidden="true">
-    <div class="modal__content">
-      <button class="modal__close" id="closeModal">✕</button>
-      <h3 id="modalTitle">로그인</h3>
-      <input type="email" id="authEmail" placeholder="이메일" />
-      <input type="password" id="authPassword" placeholder="비밀번호" />
-      <button class="btn primary" id="authSubmit">확인</button>
-      <p class="caption">Supabase 인증으로 로그인/회원가입됩니다.</p>
-    </div>
+      <div class="modal__content auth-modal">
+        <button class="modal__close" id="closeModal">✕</button>
+        <h3 id="modalTitle">로그인</h3>
+        <p class="subtitle auth-desc">이메일과 비밀번호로 로그인하거나 소셜 계정으로 간편하게 로그인하세요.</p>
+        <div class="auth-fields">
+          <label class="caption" for="authEmail">이메일</label>
+          <input class="auth-input" type="email" id="authEmail" placeholder="you@example.com" />
+          <label class="caption" for="authPassword">비밀번호</label>
+          <input class="auth-input" type="password" id="authPassword" placeholder="비밀번호" />
+          <!-- 체크박스 위치 조정: 픽셀 값은 style.css의 .remember-checkbox { margin-left: Xpx }에서 변경하세요 -->
+          <div class="auth-checks">
+            <label style="display:flex; flex-direction:row; align-items:center; gap:4px; font-size:14px; margin:0;">
+              <input class="remember-checkbox" type="checkbox" id="rememberMe" /> 로그인 정보 기억
+            </label>
+          </div>
+          <div class="auth-links">
+            <a href="#" class="caption" style="color:var(--muted); text-decoration:underline;">비밀번호 찾기</a>
+          </div>
+          <button class="btn primary" id="authSubmit" type="button">로그인</button>
+          <div style="text-align:center; margin:12px 0; font-size:13px; color:var(--muted);">또는</div>
+          <div class="social-row">
+            <button class="btn ghost" id="socialKakao">Kakao로 계속하기</button>
+            <button class="btn ghost" id="socialFacebook">Facebook로 계속하기</button>
+          </div>
+          <p class="caption" style="margin-top:10px;">Supabase 인증으로 로그인/회원가입됩니다.</p>
+        </div>
+      </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
